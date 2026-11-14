@@ -144,8 +144,13 @@ namespace PlayEveryWare.EpicOnlineServices.Editor.Utility
 
             if (!executorInstance)
             {
+#if UNITY_2023_1_OR_NEWER
+                executorInstance = UnityEngine.Object.FindFirstObjectByType<
+                    CoroutineExecutor>();
+#else
                 executorInstance = UnityEngine.Object.FindObjectOfType<
                     CoroutineExecutor>();
+#endif
 
                 if (!executorInstance)
                 {

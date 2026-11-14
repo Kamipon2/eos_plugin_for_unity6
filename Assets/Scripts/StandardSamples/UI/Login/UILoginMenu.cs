@@ -381,8 +381,13 @@ using UnityEngine.InputSystem;
             if (null != EventSystem.current.currentSelectedGameObject)
                 return;
 
+#if UNITY_2023_1_OR_NEWER
+            var nextSelectable = FindObjectsByType<Selectable>(FindObjectsInactive.Exclude, FindObjectsSortMode.None)
+                .FirstOrDefault(s => s.navigation.mode != Navigation.Mode.None);
+#else
             var nextSelectable = FindObjectsOfType<Selectable>(false)
                 .FirstOrDefault(s => s.navigation.mode != Navigation.Mode.None);
+#endif
             if (null != nextSelectable)
             {
                 EventSystem.current.SetSelectedGameObject(nextSelectable.gameObject);
@@ -870,7 +875,11 @@ using UnityEngine.InputSystem;
         public void OnLogoutButtonClick()
         {
             // if the readme is open, then close it.
+#if UNITY_2023_1_OR_NEWER
+            UIReadme readme = FindFirstObjectByType<UIReadme>();
+#else
             UIReadme readme = UIReadme.FindObjectOfType<UIReadme>();
+#endif
             readme?.CloseReadme();
 
             if (EOSManager.Instance.GetLocalUserId() == null)

@@ -1,18 +1,16 @@
-buildscript {
-    repositories {
-        google()
-        jcenter()
-        flatDir(dirs: 'libs')
-    }
-    
-    dependencies {
-        classpath "com.android.tools.build:gradle:3.6.0"
-    }
-}
+// NOTE: This file is a library module that Unity includes into the generated Gradle project.
+// Do NOT add a buildscript{} block or a classpath for the Android Gradle Plugin here: Unity
+// already provides it (AGP 8.x in Unity 6), and a second, older copy breaks the build.
+// jcenter() has also been removed; all dependencies below come from google()/mavenCentral(),
+// which Unity configures on the root project.
+//
+// The **MACROS** below are replaced by AndroidBuilder (EOS plugin editor script) before each build.
 
 apply plugin: 'com.android.library'
 
 android {
+    **NAMESPACE**
+
     sourceSets {
         main {
             manifest.srcFile 'AndroidManifest.xml'
@@ -25,14 +23,18 @@ android {
 
     compileSdkVersion **APIVERSION**
     buildToolsVersion '**BUILDTOOLS**'
-    defaultConfig {
-        targetSdkVersion **TARGETSDKVERSION**
-    }
 }
+
 dependencies {
-        implementation 'androidx.appcompat:appcompat:1.5.1'
-        implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-        implementation 'androidx.security:security-crypto:1.0.0'
-        implementation 'androidx.browser:browser:1.4.0'
-    //api fileTree(dir: 'libs', include: ['*.aar'])
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.security:security-crypto:1.0.0'
+    implementation 'androidx.browser:browser:1.4.0'
+
+    // Credential Manager / Google ID. These used to live in the project's mainTemplate.gradle.
+    // Unity 6 changed the format of that template, so they are declared here instead, which
+    // lets the project use Unity's default main template.
+    implementation 'androidx.credentials:credentials:1.3.0'
+    implementation 'androidx.credentials:credentials-play-services-auth:1.3.0'
+    implementation 'com.google.android.libraries.identity.googleid:googleid:1.1.1'
 }

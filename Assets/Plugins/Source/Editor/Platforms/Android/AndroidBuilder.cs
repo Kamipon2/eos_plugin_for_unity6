@@ -37,14 +37,95 @@ namespace PlayEveryWare.EpicOnlineServices.Editor.Build
     using Config = EpicOnlineServices.Config;
     public class AndroidBuilder : PlatformSpecificBuilder
     {
+        /// <summary>
+        /// Namespace given to the generated eos_dependencies Android library.
+        /// Android Gradle Plugin 8 (Unity 6) requires it to be declared in
+        /// build.gradle instead of the "package" attribute of the manifest.
+        /// </summary>
+        private const string AndroidLibraryNamespace = "com.pew.eos_dependencies";
+
         public AndroidBuilder() : base("Plugins/Android", BuildTarget.Android) { }
 
         public override void PreBuild(BuildReport report)
         {
+            DisableLegacyMainGradleTemplate();
+            EnsureMinimumSdkVersion();
             InstallEOSDependentLibrary();
             ConfigureGradleTemplateProperties();
             ConfigureEOSDependentLibrary();
             DetermineLibraryLinkingMethod();
+
+            // Files were copied into Assets/Plugins/Android during the build
+            // preprocess step, so make sure Unity has imported them before it
+            // generates the Gradle project.
+            AssetDatabase.Refresh();
+        }
+
+        /// <summary>
+        /// Older versions of the plugin shipped a mainTemplate.gradle written
+        /// for Unity 2021/2022. Unity 6 uses a different template format
+        /// (for example it requires a "namespace" for the unityLibrary
+        /// module), so a leftover copy makes the Gradle build fail. If such a
+        /// file is found it is renamed to mainTemplate.gradle.DISABLED, which
+        /// makes Unity fall back to its own default template. The EOS
+        /// dependencies that the old template contained are now declared by
+        /// the eos_dependencies Android library instead.
+        /// </summary>
+        private static void DisableLegacyMainGradleTemplate()
+        {
+#if UNITY_6000_0_OR_NEWER
+            string templatePath = Path.Combine(Application.dataPath, "Plugins", "Android", "mainTemplate.gradle");
+            if (!File.Exists(templatePath))
+            {
+                return;
+            }
+
+            string contents = File.ReadAllText(templatePath);
+            if (Regex.IsMatch(contents, @"\bnamespace\s+[""']"))
+            {
+                // Already a Unity 6 style template, leave it alone.
+                return;
+            }
+
+            string backupPath = templatePath + ".DISABLED";
+            if (File.Exists(backupPath))
+            {
+                File.Delete(backupPath);
+            }
+
+            File.Move(templatePath, backupPath);
+
+            string metaPath = templatePath + ".meta";
+            if (File.Exists(metaPath))
+            {
+                File.Delete(metaPath);
+            }
+
+            Debug.LogWarning(
+                "EOS Plugin: Assets/Plugins/Android/mainTemplate.gradle was written for an older Unity version and " +
+                "is not compatible with Unity 6, so it has been renamed to mainTemplate.gradle.DISABLED. " +
+                "Unity's default template will be used instead. If you need custom changes, enable " +
+                "'Custom Main Gradle Template' in Player Settings > Publishing Settings and re-apply them to the new file.");
+#endif
+        }
+
+        /// <summary>
+        /// The Android libraries used by the EOS plugin (androidx.security-crypto and the EOS SDK itself)
+        /// require at least API level 23. Unity 6.0 still allows lower values, which makes the Android
+        /// manifest merger fail.
+        /// </summary>
+        private static void EnsureMinimumSdkVersion()
+        {
+#if UNITY_ANDROID
+            const AndroidSdkVersions requiredMinSdk = AndroidSdkVersions.AndroidApiLevel23;
+            if (PlayerSettings.Android.minSdkVersion < requiredMinSdk)
+            {
+                Debug.LogWarning(
+                    $"EOS Plugin: Minimum API Level was {PlayerSettings.Android.minSdkVersion}, but the EOS plugin " +
+                    $"requires at least {requiredMinSdk}. Player Settings have been updated.");
+                PlayerSettings.Android.minSdkVersion = requiredMinSdk;
+            }
+#endif
         }
 
         private static string GetAndroidEOSValuesConfigPath()
@@ -95,15 +176,37 @@ namespace PlayEveryWare.EpicOnlineServices.Editor.Build
             }
         }
 
+        /// <summary>
+        /// Returns the physical folder of the EOS UPM package, or null when the
+        /// plugin is not installed as a package. Packages installed from git or
+        /// a registry live in Library/PackageCache, so the virtual
+        /// "Packages/&lt;name&gt;" path cannot be used to find their files.
+        /// </summary>
+        private static string GetPackageResolvedPath()
+        {
+            var packageInfo = UnityEditor.PackageManager.PackageInfo.FindForAssetPath(
+                $"Packages/{EOSPackageInfo.PackageName}/package.json");
+            return packageInfo?.resolvedPath;
+        }
+
         private static string GetPlatformSpecificAssetsPath(string subpath)
         {
             string packagePathname = Path.GetFullPath(Path.Combine("Packages", EOSPackageInfo.PackageName,
                 "PlatformSpecificAssets~", subpath));
+            string resolvedPackageRoot = GetPackageResolvedPath();
+            string resolvedPackagePathname = string.IsNullOrEmpty(resolvedPackageRoot)
+                ? null
+                : Path.GetFullPath(Path.Combine(resolvedPackageRoot, "PlatformSpecificAssets~", subpath));
             string streamingAssetsSamplesPathname =
                 Path.Combine(Application.dataPath, "..", "etc", "PlatformSpecificAssets", subpath);
             string pathToInstallFrom = "";
 
-            if (Directory.Exists(packagePathname))
+            if (resolvedPackagePathname != null && Directory.Exists(resolvedPackagePathname))
+            {
+                // Install from the package's real location on disk
+                pathToInstallFrom = resolvedPackagePathname;
+            }
+            else if (Directory.Exists(packagePathname))
             {
                 // Install from package path
                 pathToInstallFrom = packagePathname;
@@ -188,9 +291,14 @@ namespace PlayEveryWare.EpicOnlineServices.Editor.Build
             {
                 int maxVersion = 0;
                 var apiRegex = new Regex(@"android-(\d+)");
+                string platformsPath = Path.Combine(AndroidExternalToolsSettings.sdkRootPath, "platforms");
+                if (!Directory.Exists(platformsPath))
+                {
+                    return 29;
+                }
+
                 //find max installed android api
-                foreach (var dir in Directory.GetDirectories(Path.Combine(AndroidExternalToolsSettings.sdkRootPath,
-                             "platforms")))
+                foreach (var dir in Directory.GetDirectories(platformsPath))
                 {
                     var dirName = Path.GetFileName(dir);
                     var match = apiRegex.Match(dirName);
@@ -230,8 +338,12 @@ namespace PlayEveryWare.EpicOnlineServices.Editor.Build
             var toolsRegex = new Regex(@"(\d+)\.(\d+)\.(\d+)");
             int maxMajor = 0, maxMinor = 0, maxPatch = 0;
             //find highest usable build tools version
-            const int highestVersion = 
-#if UNITY_2022_3_OR_NEWER
+            const int highestVersion =
+#if UNITY_6000_2_OR_NEWER
+            36
+#elif UNITY_6000_0_OR_NEWER
+            35
+#elif UNITY_2022_3_OR_NEWER
             34
 #elif UNITY_2022_2_OR_NEWER
             32
@@ -240,8 +352,13 @@ namespace PlayEveryWare.EpicOnlineServices.Editor.Build
 #endif
 ;
 
-            foreach (var dir in Directory.GetDirectories(Path.Combine(AndroidExternalToolsSettings.sdkRootPath,
-                         "build-tools")))
+            string buildToolsPath = Path.Combine(AndroidExternalToolsSettings.sdkRootPath, "build-tools");
+            if (!Directory.Exists(buildToolsPath))
+            {
+                return "30.0.3";
+            }
+
+            foreach (var dir in Directory.GetDirectories(buildToolsPath))
             {
                 var dirName = Path.GetFileName(dir);
                 var match = toolsRegex.Match(dirName);
@@ -286,9 +403,41 @@ namespace PlayEveryWare.EpicOnlineServices.Editor.Build
             var contents = File.ReadAllText(filepath);
             string apiVersion = GetTargetAPI().ToString();
             string buildTools = GetBuildTools();
+
+            // AGP 8 (Unity 6) requires the namespace in build.gradle. Older
+            // versions do not know the property (or still use the manifest).
+#if UNITY_6000_0_OR_NEWER
+            string namespaceLine = $"namespace \"{AndroidLibraryNamespace}\"";
+#else
+            string namespaceLine = string.Empty;
+#endif
+
             string newContents = contents.Replace("**APIVERSION**", apiVersion)
-                .Replace("**TARGETSDKVERSION**", apiVersion).Replace("**BUILDTOOLS**", buildTools);
+                .Replace("**TARGETSDKVERSION**", apiVersion)
+                .Replace("**BUILDTOOLS**", buildTools)
+                .Replace("**NAMESPACE**", namespaceLine);
             File.WriteAllText(filepath, newContents);
+        }
+
+        /// <summary>
+        /// With AGP 8 (Unity 6) a "package" attribute in a library manifest is
+        /// an error, because the namespace comes from build.gradle.
+        /// </summary>
+        private static void ConfigureLibraryManifest(string manifestPath)
+        {
+#if UNITY_6000_0_OR_NEWER
+            if (!File.Exists(manifestPath))
+            {
+                return;
+            }
+
+            string contents = File.ReadAllText(manifestPath);
+            string updated = Regex.Replace(contents, @"\s+package\s*=\s*""[^""]*""", string.Empty);
+            if (updated != contents)
+            {
+                File.WriteAllText(manifestPath, updated);
+            }
+#endif
         }
 
         private static void InstallEOSDependentLibrary()
@@ -309,6 +458,7 @@ namespace PlayEveryWare.EpicOnlineServices.Editor.Build
                 InstallFiles(filenames, packagedPathname, assetsPathname);
 
                 WriteConfigMacros(Path.Combine(assetsPathname, buildGradlePath));
+                ConfigureLibraryManifest(Path.Combine(assetsPathname, "eos_dependencies.androidlib/AndroidManifest.xml"));
             }
         }
 
@@ -370,20 +520,31 @@ namespace PlayEveryWare.EpicOnlineServices.Editor.Build
 
         private static void DetermineLibraryLinkingMethod()
         {
-            string packagePath = Path.GetFullPath("Packages/" + EOSPackageInfo.PackageName +
-                                                  "/PlatformSpecificAssets~/EOS/Android/");
-            string androidAssetFilepath = Application.dataPath + "/../etc/PlatformSpecificAssets/EOS/Android/";
-
-            string pluginSource =
-                Directory.Exists(packagePath)
-                    ? packagePath
-                    : androidAssetFilepath; //From Package or From Assets(EOS Plugin Repo)
+            // Reuse the same lookup as the other Android assets (package on disk, Packages/ path, or repo etc/ folder)
+            string pluginSource = GetPlatformSpecificAssetsPath("EOS/Android/");
+            if (string.IsNullOrEmpty(pluginSource))
+            {
+                return;
+            }
 
             string linkType = Config.Get<AndroidBuildConfig>().DynamicallyLinkEOSLibrary
-                ? "dynamic-stdc++/"
-                : "static-stdc++/"; //Dynamic or Static       
+                ? "dynamic-stdc++"
+                : "static-stdc++"; //Dynamic or Static
 
-            string sourcePath = pluginSource + linkType + "aar";
+            string sourcePath = Path.Combine(pluginSource, linkType, "aar");
+            if (!Directory.Exists(sourcePath) && linkType == "dynamic-stdc++")
+            {
+                Debug.LogWarning("EOS Plugin: The dynamic-stdc++ EOS library is not available, " +
+                                 "using the static-stdc++ library instead.");
+                sourcePath = Path.Combine(pluginSource, "static-stdc++", "aar");
+            }
+
+            if (!Directory.Exists(sourcePath))
+            {
+                Debug.LogError($"EOS Plugin: Could not find the EOS Android library folder at \"{sourcePath}\".");
+                return;
+            }
+
             string destPath = "Assets/Plugins/Android/aar";
 
             if (Directory.Exists(destPath))

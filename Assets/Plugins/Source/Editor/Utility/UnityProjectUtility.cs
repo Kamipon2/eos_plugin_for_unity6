@@ -93,7 +93,7 @@ namespace PlayEveryWare.EpicOnlineServices.Editor.Utility
                 Scene currentScene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
 
                 // Get all the game objects (including inactive objects)
-                GameObject[] gameObjects = Object.FindObjectsOfType<GameObject>(true);
+                GameObject[] gameObjects = FindAllGameObjectsInLoadedScenes();
 
                 // Iterate over all the game objects
                 foreach (GameObject go in gameObjects)
@@ -184,9 +184,22 @@ namespace PlayEveryWare.EpicOnlineServices.Editor.Utility
             return !EditorApplication.isPlaying;
         }
 
+        /// <summary>
+        /// Finds every GameObject (including inactive ones) in the loaded scenes.
+        /// Object.FindObjectsOfType is obsolete as of Unity 2023.1 / Unity 6.
+        /// </summary>
+        private static GameObject[] FindAllGameObjectsInLoadedScenes()
+        {
+#if UNITY_2023_1_OR_NEWER
+            return Object.FindObjectsByType<GameObject>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+#else
+            return Object.FindObjectsOfType<GameObject>(true);
+#endif
+        }
+
         private static void FindPrefabsInCurrentScene(ref HashSet<string> referencedPrefabGuids)
         {
-            GameObject[] allGameObjects = Object.FindObjectsOfType<GameObject>(true);
+            GameObject[] allGameObjects = FindAllGameObjectsInLoadedScenes();
             foreach (var go in allGameObjects)
             {
                 AddPrefabReferencesFromGameObject(ref referencedPrefabGuids, go);
